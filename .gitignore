@@ -156,3 +156,4 @@ cython_debug/
 *.json
 code-json/*
 !code-json/origin.json
+!code-json/all.json

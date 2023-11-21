@@ -12,6 +12,7 @@ from format.multi import Multi
 
 logger = logging.getLogger(__file__)
 mutate_exec = os.path.join(os.getcwd(), "run-ammon.sh")
+valid_mutation = {0, 1, 3, 4, 5}
 clang_style = "{BasedOnStyle: llvm, MaxEmptyLinesToKeep: 1, KeepEmptyLinesAtTheStartOfBlocks: false}"
 format_funcs = {"multi": Multi().transform, "one-input": OneInput().transform}
 
@@ -34,11 +35,20 @@ def logger_config(log_file_name: str):
     logger.addHandler(fh)
 
 
-def check_valid(mutated, desc: str):
+def check_valid(result):
     """
     使用 clang++ 编译 'mutated' 中的代码, 根据需要检查语法错误
     如果语法正确或者不需要检查，返回 True; 否则返回 False
     """
+    if len(result) < 5:
+        return False
+
+    mutated = "\n".join(result[3:-1])
+    desc = result[2]
+
+    if mutated == "":
+        return False
+
     if "syntax" in desc:
         return True
 
@@ -104,35 +114,50 @@ def mutate(one: dict):
                 exit(1)
 
             # do mutatation
-            cmd = [mutate_exec, f.name]
+            cmd = [mutate_exec, f.name, "-t"]
 
-            count = 0
-            while True:
-                count += 1
-                logger.info(
-                    "Executing '{}' for the {}-th time".format(" ".join(cmd), count)
-                )
-                result = sp.check_output(cmd, text=True).splitlines()
+            # 遍历所有可以使用的 mutation
+            answer_mutated = []
+            for t in valid_mutation:
+                cur_cmd = cmd + [str(t)]
+                count = 0
 
-                info = result[1].split(" ")
-                mutated = "\n".join(result[3:-1])
-                pos = info[:2]
-                desc = result[2]
-
-                if check_valid(mutated, desc):
-                    errs.append({"pos": pos, "code": mutated, "desc": desc})
-                    break
-
-                logger.debug(
-                    "Mutation error\npos: {}\ndesc: {}\ncode:\n{}".format(
-                        pos, desc, mutated
+                # 重复某一个 mutation 最多三次, 排除偶然因素
+                while True:
+                    count += 1
+                    logger.info(
+                        "Executing '{}' for the {}-th time".format(
+                            " ".join(cur_cmd), count
+                        )
                     )
-                )
+                    result = sp.check_output(cur_cmd, text=True).splitlines()
 
-                # 最多重复 5 次, 如果 5 次还没出去就删除
-                if count >= 5:
-                    answer_to_remove.append(idx)
-                    break
+                    if check_valid(result):
+                        info = result[1].split(" ")
+                        pos = info[:2]
+                        desc = result[2]
+                        mutated = "\n".join(result[3:-1])
+
+                        answer_mutated.append(
+                            {"pos": pos, "code": mutated, "desc": desc}
+                        )
+                        break
+
+                    logger.debug(
+                        "Mutation error:\nammon result:\n{}\ncode:\n{}".format(
+                            result, code
+                        )
+                    )
+
+                    # 最多重复 3 次
+                    if count >= 3:
+                        break
+
+            # 如果当前 answer 一个 err 都没生成
+            if len(answer_mutated) == 0:
+                answer_to_remove.append(idx)
+            else:
+                errs.append(answer_mutated)
 
     # 删除掉没有成功生成对应变异体的 answer
     for idx in sorted(answer_to_remove, reverse=True):
